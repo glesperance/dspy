@@ -57,7 +57,7 @@ class LM:
             model_type=self.model_type,
         )
         self.history.append(entry)
-        
+
         return outputs
 
     def inspect_history(self, n: int = 1):
@@ -124,7 +124,14 @@ def _inspect_history(lm, n: int = 1):
 
         for msg in messages:
             print(_red(f"{msg['role'].capitalize()} message:"))
-            print(msg["content"].strip())
+            if isinstance(msg["content"], list):
+                for content_item in msg["content"]:
+                    if content_item["type"] == "text":
+                        print(content_item["text"].strip())
+                    elif content_item["type"] == "image_url":
+                        print(f"[Image: {content_item['image_url']['url']}]")
+            else:
+                print(msg["content"].strip())
             print("\n")
 
         print(_red("Response:"))

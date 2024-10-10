@@ -1,15 +1,25 @@
 import ast
+import base64
+import io
 import json
 import re
 import textwrap
 from typing import get_args, get_origin
 
 import pydantic
+from PIL import Image
 from pydantic import TypeAdapter
 
 from .base import Adapter
 
 field_header_pattern = re.compile(r"\[\[ ## (\w+) ## \]\]")
+
+
+def format_image_content(img: Image.Image) -> dict:
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    img_base64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_base64}"}}
 
 
 class ChatAdapter(Adapter):
@@ -97,10 +107,13 @@ def _format_field_value(value) -> str:
 def format_fields(fields):
     output = []
     for k, v in fields.items():
-        v = _format_field_value(v)
-        output.append(f"[[ ## {k} ## ]]\n{v}")
-
-    return "\n\n".join(output).strip()
+        if isinstance(v, Image.Image):
+            output.append({"type": "text", "text": f"[[ ### {k} ### ]]"})
+            output.append(format_image_content(v))
+        else:
+            v = _format_field_value(v)
+            output.append({"type": "text", "text": f"[[ ## {k} ## ]]\n{v}"})
+    return output
 
 
 def parse_value(value, annotation):
@@ -132,7 +145,10 @@ def format_turn(signature, values, role, incomplete=False):
         if not set(values).issuperset(set(field_names)):
             raise ValueError(f"Expected {field_names} but got {values.keys()}")
 
-    content.append(format_fields({k: values.get(k, "Not supplied for this particular example.") for k in field_names}))
+    formatted_fields = format_fields(
+        {k: values.get(k, "Not supplied for this particular example.") for k in field_names}
+    )
+    content.extend([item["text"] for item in formatted_fields if item["type"] == "text"])
 
     if role == "user":
         content.append(
@@ -173,9 +189,13 @@ def prepare_instructions(signature):
     parts.append("Your output fields are:\n" + enumerate_fields(signature.output_fields))
     parts.append("All interactions will be structured in the following way, with the appropriate values filled in.")
 
-    parts.append(format_fields({f: f"{{{f}}}" for f in signature.input_fields}))
-    parts.append(format_fields({f: f"{{{f}}}" for f in signature.output_fields}))
-    parts.append(format_fields({"completed": ""}))
+    input_fields = format_fields({f: f"{{{f}}}" for f in signature.input_fields})
+    output_fields = format_fields({f: f"{{{f}}}" for f in signature.output_fields})
+    completed_field = format_fields({"completed": ""})
+
+    parts.extend([content["text"] for content in input_fields if content["type"] == "text"])
+    parts.extend([content["text"] for content in output_fields if content["type"] == "text"])
+    parts.extend([content["text"] for content in completed_field if content["type"] == "text"])
 
     instructions = textwrap.dedent(signature.instructions)
     objective = ("\n" + " " * 8).join([""] + instructions.splitlines())
